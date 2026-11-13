@@ -25,7 +25,9 @@ jobs:
             r=$(curl -s -m 20 -X POST https://api.nrg-egypt.com/webhook/sayvo-register \
                   -H 'Content-Type: application/json' -H 'Origin: https://getsayvo.com' \
                   -d '{"k":"wasl-nrg-2026","d":"serverwatch0000001"}')
-            echo "healthz=$h register=$(echo "$r" | head -c 80)"
+            # the repo is public: never print the token, only whether one came back
+            echo "$r" | grep -q '"t":"' && tk=yes || tk=no
+            echo "healthz=$h token=$tk"
             [ "$h" = "200" ] && echo "$r" | grep -q '"t":"'
           }
           ok=0
