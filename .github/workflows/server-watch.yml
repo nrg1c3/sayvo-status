@@ -1,0 +1,54 @@
+name: server-watch
+# Sayvo's server, watched from GitHub every 15 minutes, apart from Claude and its connectors.
+# Lives in this small public repo so the checks cost no Actions minutes (sayvo-android is private).
+# If the server stops answering, an issue «⚠️ السيرفر مش بيرد» opens (GitHub emails the owner);
+# when it answers again, the issue gets a comment and closes. Nothing secret here: only public addresses.
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+permissions:
+  issues: write
+  contents: read
+concurrency: { group: server-watch, cancel-in-progress: false }
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ask the server (3 tries, 20 s apart)
+        id: ask
+        run: |
+          check() {
+            h=$(curl -s -o /dev/null -m 15 -w '%{http_code}' https://api.nrg-egypt.com/healthz)
+            # the same request the app makes on its first start (a fixed watcher id, so it is one device, not many)
+            r=$(curl -s -m 20 -X POST https://api.nrg-egypt.com/webhook/sayvo-register \
+                  -H 'Content-Type: application/json' -H 'Origin: https://getsayvo.com' \
+                  -d '{"k":"wasl-nrg-2026","d":"serverwatch0000001"}')
+            echo "healthz=$h register=$(echo "$r" | head -c 80)"
+            [ "$h" = "200" ] && echo "$r" | grep -q '"t":"'
+          }
+          ok=0
+          for i in 1 2 3; do if check; then ok=1; break; fi; sleep 20; done
+          echo "ok=$ok" >> "$GITHUB_OUTPUT"
+          echo "at=$(date -u '+%Y-%m-%d %H:%M UTC')" >> "$GITHUB_OUTPUT"
+      - name: Open or close the alert issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OK: ${{ steps.ask.outputs.ok }}
+          AT: ${{ steps.ask.outputs.at }}
+        run: |
+          T="⚠️ السيرفر مش بيرد"
+          n=$(gh issue list -R "$GITHUB_REPOSITORY" --state open --label server-down --json number -q '.[0].number')
+          if [ "$OK" != "1" ]; then
+            if [ -z "$n" ]; then
+              gh label create server-down -R "$GITHUB_REPOSITORY" --color B60205 --description "Sayvo's server isn't answering" 2>/dev/null || true
+              gh issue create -R "$GITHUB_REPOSITORY" --label server-down --title "$T" --body "من $AT: api.nrg-egypt.com مش بيرد (\`/healthz\` أو \`sayvo-register\`)، 3 محاولات ورا بعض.
+          التطبيق نفسه بيكمّل: الترتيب على الموبايل، وصوت الموبايل، والمنبّهات، واللي اتقال بيستنى ويتبعت لما السيرفر يرجع.
+          اتأكد من n8n (الـcontainer والـexecutions). الإيشو ده هيتقفل لوحده أول ما السيرفر يرد."
+            fi
+            exit 1
+          elif [ -n "$n" ]; then
+            gh issue comment "$n" -R "$GITHUB_REPOSITORY" --body "رجع يرد ✓ ($AT)"
+            gh issue close "$n" -R "$GITHUB_REPOSITORY"
+          fi
